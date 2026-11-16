@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="232" viewBox="0 0 680 232" role="img" aria-label="Bar colors by model: Fable purple, Opus coral, Sonnet blue, Haiku teal, each shown at low effort and at max effort, where max starts on a deeper shade">
+<style>text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}.t{fill:#ececec}.s{fill:#a8a8a4}</style>
+<defs>
+<linearGradient id="fl" x1="0" x2="1"><stop offset="0" stop-color="#7F77DD"/><stop offset=".5" stop-color="#7F77DD"/><stop offset="1" stop-color="#AFA9EC"/></linearGradient>
+<linearGradient id="fm" x1="0" x2="1"><stop offset="0" stop-color="#534AB7"/><stop offset=".5" stop-color="#7F77DD"/><stop offset="1" stop-color="#AFA9EC"/></linearGradient>
+<linearGradient id="ol" x1="0" x2="1"><stop offset="0" stop-color="#D85A30"/><stop offset=".5" stop-color="#D85A30"/><stop offset="1" stop-color="#F0997B"/></linearGradient>
+<linearGradient id="om" x1="0" x2="1"><stop offset="0" stop-color="#993C1D"/><stop offset=".5" stop-color="#D85A30"/><stop offset="1" stop-color="#F0997B"/></linearGradient>
+<linearGradient id="sl" x1="0" x2="1"><stop offset="0" stop-color="#378ADD"/><stop offset=".5" stop-color="#378ADD"/><stop offset="1" stop-color="#85B7EB"/></linearGradient>
+<linearGradient id="sm" x1="0" x2="1"><stop offset="0" stop-color="#185FA5"/><stop offset=".5" stop-color="#378ADD"/><stop offset="1" stop-color="#85B7EB"/></linearGradient>
+<linearGradient id="hl" x1="0" x2="1"><stop offset="0" stop-color="#1D9E75"/><stop offset=".5" stop-color="#1D9E75"/><stop offset="1" stop-color="#5DCAA5"/></linearGradient>
+<linearGradient id="hm" x1="0" x2="1"><stop offset="0" stop-color="#0F6E56"/><stop offset=".5" stop-color="#1D9E75"/><stop offset="1" stop-color="#5DCAA5"/></linearGradient>
+</defs>
+<rect width="680" height="232" rx="12" fill="#1f1f1e"/>
+<text class="s" x="120" y="28" font-size="12">Low effort</text>
+<text class="s" x="400" y="28" font-size="12">Max effort</text>
+<text class="t" x="20" y="61" font-size="13" font-weight="600">Fable</text><rect x="120" y="50" width="260" height="14" rx="7" fill="url(#fl)"/><rect x="400" y="50" width="260" height="14" rx="7" fill="url(#fm)"/>
+<text class="t" x="20" y="105" font-size="13" font-weight="600">Opus</text><rect x="120" y="94" width="260" height="14" rx="7" fill="url(#ol)"/><rect x="400" y="94" width="260" height="14" rx="7" fill="url(#om)"/>
+<text class="t" x="20" y="149" font-size="13" font-weight="600">Sonnet</text><rect x="120" y="138" width="260" height="14" rx="7" fill="url(#sl)"/><rect x="400" y="138" width="260" height="14" rx="7" fill="url(#sm)"/>
+<text class="t" x="20" y="193" font-size="13" font-weight="600">Haiku</text><rect x="120" y="182" width="260" height="14" rx="7" fill="url(#hl)"/><rect x="400" y="182" width="260" height="14" rx="7" fill="url(#hm)"/>
+</svg>

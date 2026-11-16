@@ -1,22 +1,20 @@
 # Relay
 
-A Claude Code mod that keeps a live pane beside the chat showing every agent and subagent at work.
+Relay is a Claude Code mod that keeps a pane next to the chat showing every agent and subagent while it works. When a workflow fans out to several agents, it's hard to tell who is doing what without opening each one.
 
-When a workflow starts, or two or more subagents run at once, the Relay pane opens by itself. It groups the agents under the task they belong to (the workflow's name, or "Subagents") and shows one row per agent:
+![Drawing of the Relay pane with three agents: Opus reviewing bugs, Sonnet checking performance, Haiku finished](assets/pane.svg)
 
-- **Task**: what the agent was asked to do.
-- **Now**: what it is doing at this moment, taken from its latest tool call ("Edit register.tsx", "Bash npm test").
-- **Model and effort**: for example "Opus 5.5 · high".
-- **Tokens**: every token the agent has used so far.
-- **Percent complete**: shown as a bar with slow-moving stripes.
+The pane opens by itself when a workflow starts or when two subagents run at the same time. Agents sit under the workflow's name, or under "Subagents" when they weren't started by a workflow. Each row has the task the agent was given and what it's doing right now, which is its latest tool call ("Edit register.tsx", "Bash npm test"). It also shows the model and effort, the tokens used so far, and a progress bar with slow-moving stripes.
 
 ## Colors
 
-Each agent's bar is a single-hue gradient whose hue comes from its model: Fable is purple, Opus coral, Sonnet blue, Haiku teal, and any other model gray. Higher effort starts the bar on a deeper shade. A color key at the top of the pane lists the models in view.
+The model decides the bar's color. Fable is purple, Opus is coral, Sonnet is blue and Haiku is teal; anything else is gray. Higher effort starts the bar on a deeper shade, so an Opus agent on max looks darker than one on low. The key at the top of the pane lists only the models you can see.
 
-## How the percent is worked out
+![Bar colors by model, at low and max effort](assets/colors.svg)
 
-Claude Code does not report how big an agent's job is, so the percent is an estimate, marked with "≈". It divides the tokens the agent has used by the average tokens of agents that already finished in the session (600k before any has finished), and it never shows more than 95% until the agent actually finishes. An agent that reports its own steps through a `step` tool (as savvy-flow workers do) shows the exact "step 3/5" instead.
+## About the percent
+
+Claude Code doesn't tell a mod how big an agent's job is, so the percent is a guess, and it says so with "≈". Relay divides the tokens an agent has used by the average used by agents that already finished in the session, or by 600k if none have finished yet. It won't go past 95% until the agent is actually done. If an agent reports its own steps through a `step` tool, the way savvy-flow workers do, you see the exact "step 3/5" instead.
 
 ## Install
 
@@ -34,13 +32,9 @@ From a shell:
 claude plugin install relay --marketplace DanberkmanPracticed/relay
 ```
 
-## Use
+## Using it
 
-- The pane opens by itself for a workflow, or once two agents run together.
-- `/relay` opens it by hand.
-- **Clear Finished** removes the agents that are done.
-- In a terminal the same pane is drawn in text, with the bar in colored blocks.
-- Animations stop when the system asks for reduced motion.
+Type `/relay` to open the pane yourself. Clear Finished removes the agents that are done. In a terminal the pane is drawn in text, with the bar as colored blocks. If your system asks for reduced motion, the stripes stop moving.
 
 ## License
 
