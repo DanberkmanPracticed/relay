@@ -1,0 +1,5 @@
+{
+  "name": "relay",
+  "owner": { "name": "Daniel Berkman" },
+  "plugins": [{ "name": "relay", "source": "./" }]
+}
