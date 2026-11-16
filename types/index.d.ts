@@ -29,8 +29,8 @@ export type Groups = Record<string, string>
 declare module 'claude-code' {
   interface PluginState {
     'relay': {
-      runs: Run[]
-      groups: Groups
+      runs: Shaped<Run[]>
+      groups: Shaped<Groups>
     }
   }
 }

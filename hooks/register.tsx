@@ -3,8 +3,9 @@ import type { EngineInterface, Register } from 'claude-code'
 
 import type { Groups, Run } from '../types'
 
-const runs = atom({ plugin: 'relay', key: 'runs' } as const, [])
-const groups = atom({ plugin: 'relay', key: 'groups' } as const, {})
+// A shape name per atom: when Run changes, bump it and older stored values are dropped instead of misread.
+const runs = atom({ plugin: 'relay', key: 'runs' } as const, [], { shape: 'runs-1' })
+const groups = atom({ plugin: 'relay', key: 'groups' } as const, {}, { shape: 'groups-1' })
 
 const PANE = 'relay'
 const TITLE = 'Relay'
@@ -42,7 +43,7 @@ export function shadesOf(r: Pick<Run, 'model' | 'effort'>): string[] {
 }
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
 
-// Which groups the pane already opened itself for; starting over on a reload only reopens it once more.
+// Which groups the pane already opened itself for in the current burst of agents; emptied when nothing runs.
 const autoOpened = new Set<string>()
 
 // A fast agent can step or even finish before agent.spawn's next() returns its id, so its row does not exist yet.
@@ -88,8 +89,18 @@ export function brief(e: Record<string, unknown>): string {
     s('query') ||
     s('url') ||
     s('skill')
-  return clip(arg ? `${tool} ${arg.replace(/\s+/g, ' ')}` : tool, 60)
+  return clip(arg ? `${tool} ${redact(arg.replace(/\s+/g, ' '))}` : tool, 60)
 }
+
+// The Now line is on screen and in session state, so keys and passwords in a command or URL are masked.
+export const redact = (s: string): string =>
+  s
+    .replace(/((?:authorization|x-api-key|api-key|cookie)\s*[:=]\s*(?:bearer\s+|basic\s+)?)[^\s'"]+/gi, '$1•••')
+    .replace(/(\bbearer\s+)[^\s'"]+/gi, '$1•••')
+    .replace(/([?&](?:access_token|token|api_key|apikey|key|password|secret|sig)=)[^&\s'"]+/gi, '$1•••')
+    .replace(/(--?(?:token|password|api-key|apikey|secret|key)[ =])[^\s'"]+/gi, '$1•••')
+    .replace(/\b(sk-|sk_live_|ghp_|gho_|ghs_|github_pat_|xox[abp]-|AKIA)[\w-]{6,}/g, '$1•••')
+    .replace(/(:\/\/[^\s:/@]+:)[^\s@/]+@/g, '$1•••@')
 
 // Tokens a run of this session usually takes: the mean of the finished ones, else the default.
 // The floor keeps one tiny finished lookup from pushing every other bar to the cap.
@@ -134,6 +145,9 @@ const CSS = `.t{fill:#1f1f1f}.s{fill:#6b6b68}.k{fill:#ecebe8}
 .live{animation:hd 2.4s ease-in-out infinite}
 @media (prefers-reduced-motion: reduce){.mv,.hd,.live{animation:none}}`
 
+// Gradient, pattern and clip ids from the run's own id, so a row keeps its ids however the list reorders.
+const uidOf = (id: string): string => id.replace(/[^\w-]/g, '_')
+
 // A redraw restarts CSS animations; a negative delay from the clock keeps them in phase across redraws.
 const phase = (at: number, ms: number) => `animation-delay:-${((at % ms) / 1000).toFixed(3)}s`
 
@@ -177,7 +191,7 @@ ${dot}
 <text class="t" x="18" y="17" font-family="${FONT}" font-size="13" font-weight="600">${xml(clip(r.task || r.type, chars))}</text>
 <text x="${W}" y="17" text-anchor="end" font-family="${FONT}" font-size="15" font-weight="700" fill="${r.status === 'failed' ? '#D0453F' : color}">${pctText(p)}</text>
 <text x="18" y="35" font-family="${FONT}" font-size="11"><tspan fill="${color}" font-weight="600">${xml(modelName(r.model) + (r.effort ? ' · ' + r.effort : ''))}</tspan><tspan class="s">${xml(clip(`  ·  ${r.type}${steps}`, chars))}</tspan></text>
-<text class="s" x="${W}" y="35" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${fmtTokens(r.tokens)} tokens</text>
+<text class="s" x="${W}" y="35" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${fmtTokens(r.tokens)} tokens processed</text>
 <text class="t" x="18" y="52" font-family="${FONT}" font-size="11.5" font-style="italic">${xml(clip(now, chars + 8))}</text>
 <g transform="translate(0,62)">${barSvg(uid, W, p.ratio, r.status, at, shades)}</g>
 </svg>`
@@ -231,7 +245,7 @@ export const register: Register = on => {
       await update($, groups, g => ({ ...g, [e.tool_use_id]: title }))
     } catch {}
     return next(e)
-  })
+  }).catch(($, e, next) => next(e)) // a bystander: on any failure the call goes ahead untouched
 
   // Every tool call inside an agent's loop is what that agent is doing now.
   on('tool.call', async ($, e, next) => {
@@ -239,18 +253,19 @@ export const register: Register = on => {
     if (id) try {
       const input = e as unknown as Record<string, unknown>
       const isStep = e.tool === STEP_TOOL
-      await update($, runs, list =>
+      // Not awaited: the tool call goes ahead without waiting for the pane.
+      void update($, runs, list =>
         list.map(r => {
           if (r.agentId !== id) return r
           if (!isStep) return { ...r, now: brief(input) }
           const total = num(input.total, r.stepTotal ?? 0)
           const done = num(input.done, r.stepDone ?? 0)
-          return { ...r, stepTotal: total || undefined, stepDone: total ? Math.min(total, done) : done, now: typeof input.note === 'string' && input.note ? clip(input.note, 60) : r.now }
+          return { ...r, stepTotal: total || undefined, stepDone: total ? Math.min(total, done) : done, now: typeof input.note === 'string' && input.note ? clip(redact(input.note), 60) : r.now }
         }),
-      )
+      ).catch(() => {})
     } catch {}
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
@@ -274,7 +289,8 @@ export const register: Register = on => {
         startedAt: at,
         endedAt: seen?.end ? at : undefined,
         tokens: seen?.tokens ?? 0,
-        now: seen?.end ? '' : 'starting',
+        // A workflow's remote agent has no local loop: no steps or tool calls ever reach the pane for it.
+        now: seen?.end ? '' : started.agentId ? 'starting' : 'running remotely, no live detail',
       }
       await update($, runs, list => [...list.filter(r => r.id !== run.id), run].slice(-200))
       if (!isWorkflow && e.parentAgentId) {
@@ -284,7 +300,7 @@ export const register: Register = on => {
       await maybeOpen($, group, isWorkflow)
     } catch {}
     return started
-  })
+  }).catch(($, e, next) => next(e)) // never refuse a spawn: a failure lets it start as asked
 
   // Each model request of an agent: its tokens and the model that answered.
   on('turn.step', async function* ($, e, next) {
@@ -314,19 +330,28 @@ export const register: Register = on => {
     if (id) try {
       const at = await $.clock.now()
       const end: Run['status'] = e.reason === 'answer' ? 'done' : 'failed'
+      const u = e.usage
+      // The turn's own total, for a run whose steps were never seen.
+      const turnTokens = u ? (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) : 0
       let matched = false
       let finished: Run | undefined
-      await update($, runs, list =>
-        list.map(r => {
+      const after = await update($, runs, list => {
+        const ended = list.map(r => {
           if (r.agentId !== id) return r
           matched = true
           if (r.status !== 'running') return r
-          finished = { ...r, status: end, endedAt: at, now: '' }
+          finished = { ...r, status: end, endedAt: at, now: '', tokens: r.tokens || turnTokens }
           return finished
-        }),
-      )
-      if (!matched) keepEarly(id, old => ({ ...old, end }))
+        })
+        // Remote agents never report an end: close them once every local agent of their workflow has ended.
+        const g = finished?.group
+        const localLeft = ended.some(r => r.group === g && r.agentId && r.status === 'running')
+        return g && !localLeft ? ended.map(r => (r.group === g && !r.agentId && r.status === 'running' ? { ...r, status: 'done' as const, endedAt: at, now: '' } : r)) : ended
+      })
+      if (!matched) keepEarly(id, old => ({ ...old, end, tokens: old.tokens || turnTokens }))
       if (finished?.status === 'done') void Promise.resolve($.ui.toast(`Done: ${clip(finished.task, 50)}`)).catch(() => {})
+      // Once nothing runs, the next burst of agents may open the pane again, even if it was closed.
+      if (!(after ?? []).some(r => r.status === 'running')) autoOpened.clear()
     } catch {}
     return next(e)
   })
@@ -357,7 +382,7 @@ export const register: Register = on => {
     const keys = [...new Set([...list].reverse().map(r => r.group))]
     const running = list.filter(r => r.status === 'running').length
     const total = list.reduce((s, r) => s + r.tokens, 0)
-    const summary = `${running} running · ${list.length - running} finished · ${fmtTokens(total)} tokens`
+    const summary = `${running} running · ${list.length - running} finished · ${fmtTokens(total)} tokens processed`
     // The color key: only the model families in the pane, then how effort shows.
     const families = Object.keys(FAMILY).filter(f => list.some(r => familyOf(r.model) === f))
     const legend = (
@@ -373,7 +398,7 @@ export const register: Register = on => {
       const mean = members.reduce((s, r) => s + progressOf(r, budget).ratio, 0) / members.length
       const isEstimate = members.some(r => progressOf(r, budget).isEstimate)
       const live = members.filter(r => r.status === 'running').length
-      return `${groupTitle(k)}  ·  ${live ? `${live} running` : 'finished'}  ·  ${fmtTokens(members.reduce((s, r) => s + r.tokens, 0))} tokens  ·  ${pctText({ ratio: mean, isEstimate })}`
+      return `${groupTitle(k)}  ·  ${live ? `${live} running` : 'finished'}  ·  ${fmtTokens(members.reduce((s, r) => s + r.tokens, 0))} tokens processed  ·  ${pctText({ ratio: mean, isEstimate })}`
     }
     const membersOf = (k: string) =>
       list.filter(r => r.group === k).sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || a.startedAt - b.startedAt)
@@ -395,11 +420,11 @@ export const register: Register = on => {
             return (
               <Box key={'g-' + k} flexDirection="column" rowGap={1}>
                 <Text bold color="#A096EB">{groupLine(k, members)}</Text>
-                {members.map((r, i) => (
+                {members.map(r => (
                   <Svg
                     key={r.id}
-                    source={runSvg(`${keys.indexOf(k)}-${i}`, W, r, budget, at)}
-                    alt={`${r.task}: ${modelName(r.model)}, ${fmtTokens(r.tokens)} tokens, ${pctText(progressOf(r, budget))}, ${r.status === 'running' ? 'now ' + r.now : r.status}`}
+                    source={runSvg(uidOf(r.id), W, r, budget, at)}
+                    alt={`${r.task}: ${modelName(r.model)}, ${fmtTokens(r.tokens)} tokens processed, ${pctText(progressOf(r, budget))}, ${r.status === 'running' ? 'now ' + r.now : r.status}`}
                     width={W}
                     height={84}
                   />
@@ -431,7 +456,8 @@ export const register: Register = on => {
                   </Text>
                   <Text dimColor wrap="truncate-end">
                     {'  '}
-<Text color={shadesOf(r)[1]}>{modelName(r.model) + (r.effort ? ' · ' + r.effort : '')}</Text> · {r.type} · {fmtTokens(r.tokens)} tokens
+                    <Text color={shadesOf(r)[1]}>{modelName(r.model) + (r.effort ? ' · ' + r.effort : '')}</Text>
+                    {` · ${r.type} · ${fmtTokens(r.tokens)} tokens processed`}
                     {r.stepTotal ? ` · step ${r.stepDone ?? 0}/${r.stepTotal}` : ''}
                   </Text>
                   {r.status === 'running' ? <Text wrap="truncate-end">{'  Now: ' + (r.now || 'thinking')}</Text> : null}

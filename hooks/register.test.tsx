@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { brief, budgetOf, familyOf, progressOf, shadesOf, workflowTitle } from './register'
+import { brief, budgetOf, familyOf, progressOf, redact, shadesOf, workflowTitle } from './register'
 
 const PANE = {
   plugin: 'relay',
@@ -12,6 +12,13 @@ const PANE = {
 test('helpers', async () => {
   expect(brief({ tool: 'Edit', file_path: 'C:\\a\\b\\register.tsx' })).toBe('Edit register.tsx')
   expect(brief({ tool: 'Bash', command: 'npm   test' })).toBe('Bash npm test')
+  // Keys never reach the screen.
+  expect(redact('curl -H "Authorization: Bearer abc123def" https://x.io')).not.toMatch(/abc123def/)
+  expect(redact('https://api.x.io/v1?api_key=SECRET1&q=a')).toBe('https://api.x.io/v1?api_key=•••&q=a')
+  expect(redact('gh auth login --token ghp_abcdefghijkl')).not.toMatch(/abcdefghijkl/)
+  expect(redact('git clone https://dan:hunter2@github.com/x')).toBe('git clone https://dan:•••@github.com/x')
+  expect(redact('npm test')).toBe('npm test')
+  expect(brief({ tool: 'Bash', command: 'export OPENAI=sk-abcdefghijklmnop' })).not.toMatch(/abcdefghijklmnop/)
   expect(workflowTitle({ script: "export const meta = { name: 'review-changes', description: 'x' }" })).toBe('review-changes')
   expect(workflowTitle({ scriptPath: 'C:\\x\\scripts\\relay-screenshot-long-wf_c18520bb-83b.js' })).toBe('relay-screenshot-long')
   const run = { id: 'a', group: 'g', task: 't', type: 'x', model: 'm', status: 'running' as const, startedAt: 0, tokens: 300_000, now: '' }
@@ -87,6 +94,33 @@ test('an agent that finishes before its row exists still shows as finished', asy
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect((await ui.find({ type: 'Text', text: /Quick lookup/ }))?.text).toMatch(/✓/)
   expect((await ui.find({ type: 'Text', text: /running/ }))?.text).toMatch(/0 running/)
+  await ui.unmount()
+})
+
+test('a remote workflow agent closes when its workflow\'s local agents end', async ($, on) => {
+  on('command.register', () => ({ value: { command: 'relay' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('clock.now', () => ({ value: 1000 }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  let n = 0
+  // The first agent starts locally, the second remotely (no agentId).
+  on('agent.spawn', () => (n++ === 0 ? { model: 'claude-opus-5-5', agentId: 'local1' } : { model: 'claude-opus-5-5' }))
+  on('turn.complete', () => ({ text: '' }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const wf = { tool_use_id: 'wf9', subagentType: 'general-purpose', prompt: 'p' }
+  await $.agent.spawn({ ...wf, description: 'Local part', workflow: { runId: 'wf_9', agentIndex: 1 } } as never)
+  await $.agent.spawn({ ...wf, description: 'Remote part', workflow: { runId: 'wf_9', agentIndex: 2 } } as never)
+
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /running remotely/ }))?.text).toBeTruthy()
+  await ui.unmount()
+
+  await $.turn.complete({ agentId: 'local1', reason: 'answer', turnId: 't', answer: 'ok' } as never)
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /Remote part/ }))?.text).toMatch(/✓/)
   await ui.unmount()
 })
 
