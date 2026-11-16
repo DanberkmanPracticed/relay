@@ -14,8 +14,11 @@ test('helpers', async () => {
   expect(brief({ tool: 'Bash', command: 'npm   test' })).toBe('Bash npm test')
   expect(workflowTitle({ script: "export const meta = { name: 'review-changes', description: 'x' }" })).toBe('review-changes')
   const run = { id: 'a', group: 'g', task: 't', type: 'x', model: 'm', status: 'running' as const, startedAt: 0, tokens: 300_000, now: '' }
-  expect(progressOf(run, 600_000)).toEqual({ ratio: 0.5, isEstimate: true })
-  expect(progressOf({ ...run, tokens: 9e9 }, 600_000).ratio).toBe(0.95)
+  const pct = (tokens: number, budget: number) => Math.round(progressOf({ ...run, tokens }, budget).ratio * 100)
+  expect(pct(300_000, 300_000)).toBe(60)
+  expect(pct(900_000, 300_000)).toBe(90)
+  expect(pct(9e9, 600_000)).toBe(95)
+  expect(progressOf(run, 300_000).isEstimate).toBe(true)
   expect(progressOf({ ...run, stepDone: 1, stepTotal: 4 }, 600_000)).toEqual({ ratio: 0.25, isEstimate: false })
   expect(budgetOf([{ ...run, status: 'done', tokens: 100_000 }])).toBe(100_000)
   // Model picks the hue, effort how deep the bar starts.

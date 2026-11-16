@@ -86,7 +86,8 @@ export function budgetOf(list: readonly Run[]): number {
 export function progressOf(r: Run, budget: number): { ratio: number; isEstimate: boolean } {
   if (r.status !== 'running') return { ratio: 1, isEstimate: false }
   if (r.stepTotal) return { ratio: Math.min(1, (r.stepDone ?? 0) / r.stepTotal), isEstimate: false }
-  return { ratio: Math.min(MAX_ESTIMATE, r.tokens / Math.max(1, budget)), isEstimate: true }
+  // An easing curve, so a long run keeps moving instead of parking at the cap: one budget reads ≈60%, two ≈82%, three ≈90%.
+  return { ratio: MAX_ESTIMATE * (1 - Math.exp(-r.tokens / Math.max(1, budget))), isEstimate: true }
 }
 
 const pctText = (p: { ratio: number; isEstimate: boolean }): string =>
