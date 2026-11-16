@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Groups, Run } from '../types'
 
 // A shape name per atom: when Run changes, bump it and older stored values are dropped instead of misread.
-const runs = atom({ plugin: 'relay', key: 'runs' } as const, [], { shape: 'runs-1' })
+const runs = atom({ plugin: 'relay', key: 'runs' } as const, [], { shape: 'runs-2' })
 const groups = atom({ plugin: 'relay', key: 'groups' } as const, {}, { shape: 'groups-1' })
 
 const PANE = 'relay'
@@ -173,19 +173,33 @@ ${isLive ? `<circle class="hd" style="${phase(at, 2400)}" cx="${fw - H / 2}" cy=
 </g>`
 }
 
+// A stalled row goes gray: it may still be working, but nothing says so.
+const rowShades = (r: Run): string[] => (r.status === 'stalled' ? FAMILY.other!.ramp : shadesOf(r))
+
+const nowLine = (r: Run): string =>
+  r.status === 'running'
+    ? `Now: ${r.now || 'thinking'}`
+    : r.status === 'stalled'
+      ? `Stalled: nothing heard for ${Math.round(STALL_MS / 60_000)} min${r.now ? ' (last: ' + r.now + ')' : ''}`
+      : r.status === 'done'
+        ? 'Finished'
+        : 'Stopped'
+
 export function runSvg(uid: string, W: number, r: Run, budget: number, at: number): string {
   const p = progressOf(r, budget)
-  const shades = shadesOf(r)
+  const shades = rowShades(r)
   const color = shades[1] ?? '#888780'
   const dot =
     r.status === 'running'
       ? `<circle class="live" style="${phase(at, 2400)}" cx="6" cy="13" r="4" fill="${color}"/>`
+      : r.status === 'stalled'
+        ? `<circle cx="6" cy="13" r="4" fill="none" stroke="#888780" stroke-width="1.5"/>`
       : r.status === 'done'
         ? `<path d="M1 13l3.5 3.5 6.5-7" fill="none" stroke="#3B9C5F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`
         : `<path d="M2 9l8 8M10 9l-8 8" stroke="#D0453F" stroke-width="2" stroke-linecap="round"/>`
   const chars = Math.max(10, Math.floor((W - 90) / 7))
   const steps = r.stepTotal ? `  ·  step ${r.stepDone ?? 0}/${r.stepTotal}` : ''
-  const now = r.status === 'running' ? `Now: ${r.now || 'thinking'}` : r.status === 'done' ? 'Finished' : 'Stopped'
+  const now = nowLine(r)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="84" viewBox="0 0 ${W} 84"><style>${CSS}</style>
 ${dot}
 <text class="t" x="18" y="17" font-family="${FONT}" font-size="13" font-weight="600">${xml(clip(r.task || r.type, chars))}</text>
@@ -219,6 +233,17 @@ async function maybeOpen($: EngineInterface, key: string, isWorkflow: boolean): 
   void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
 }
 
+// A row nothing has been heard from for this long is marked stalled; any later activity revives it.
+// It catches what no event closes: a stalled workflow agent the engine retried under a new id, or a workflow run wholly remotely.
+export const STALL_MS = 10 * 60_000
+export const isLive = (r: Run): boolean => r.status === 'running' || r.status === 'stalled'
+
+// The list with quiet running rows marked stalled, or null when none are, so an unchanged list is not written back.
+export function markStalled(list: readonly Run[], at: number): Run[] | null {
+  const quiet = (r: Run) => r.status === 'running' && at - (r.lastSeenAt ?? r.startedAt) > STALL_MS
+  return list.some(quiet) ? list.map(r => (quiet(r) ? { ...r, status: 'stalled' as const } : r)) : null
+}
+
 // A number an agent reported, or the fallback when it sent none or something that is not a number ("3/5").
 const num = (v: unknown, fallback: number): number => {
   const n = Number(v)
@@ -229,6 +254,15 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({ name: 'relay', description: 'Show the live pane of running agents and subagents' })
+    // Once a minute, mark quiet rows stalled. Quiet when nothing runs: no write, no redraw.
+    $.clock.every(60_000, () => {
+      void (async () => {
+        const list = await read($, runs)
+        if (!list.some(r => r.status === 'running')) return
+        const marked = markStalled(list, await $.clock.now())
+        if (marked) await update($, runs, () => marked)
+      })().catch(() => {})
+    })
     return started
   })
 
@@ -254,15 +288,20 @@ export const register: Register = on => {
       const input = e as unknown as Record<string, unknown>
       const isStep = e.tool === STEP_TOOL
       // Not awaited: the tool call goes ahead without waiting for the pane.
-      void update($, runs, list =>
-        list.map(r => {
-          if (r.agentId !== id) return r
-          if (!isStep) return { ...r, now: brief(input) }
-          const total = num(input.total, r.stepTotal ?? 0)
-          const done = num(input.done, r.stepDone ?? 0)
-          return { ...r, stepTotal: total || undefined, stepDone: total ? Math.min(total, done) : done, now: typeof input.note === 'string' && input.note ? clip(redact(input.note), 60) : r.now }
-        }),
-      ).catch(() => {})
+      void (async () => {
+        const at = await $.clock.now()
+        await update($, runs, list =>
+          list.map(r => {
+            if (r.agentId !== id) return r
+            // Heard from: a stalled row is running again.
+            const seen = { ...r, lastSeenAt: at, status: r.status === 'stalled' ? ('running' as const) : r.status }
+            if (!isStep) return { ...seen, now: brief(input) }
+            const total = num(input.total, r.stepTotal ?? 0)
+            const done = num(input.done, r.stepDone ?? 0)
+            return { ...seen, stepTotal: total || undefined, stepDone: total ? Math.min(total, done) : done, now: typeof input.note === 'string' && input.note ? clip(redact(input.note), 60) : r.now }
+          }),
+        )
+      })().catch(() => {})
     } catch {}
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -287,6 +326,7 @@ export const register: Register = on => {
         effort: seen?.effort,
         status: seen?.end ?? 'running',
         startedAt: at,
+        lastSeenAt: at,
         endedAt: seen?.end ? at : undefined,
         tokens: seen?.tokens ?? 0,
         // A workflow's remote agent has no local loop: no steps or tool calls ever reach the pane for it.
@@ -312,12 +352,14 @@ export const register: Register = on => {
     const model = u.model || e.model
     const effort = typeof e.effort === 'string' ? e.effort : undefined
     try {
+      const at = await $.clock.now()
       let matched = false
       await update($, runs, list =>
         list.map(r => {
           if (r.agentId !== id) return r
           matched = true
-          return { ...r, model: model || r.model, effort: effort ?? r.effort, tokens: r.tokens + used }
+          const status = r.status === 'stalled' ? ('running' as const) : r.status
+          return { ...r, status, lastSeenAt: at, model: model || r.model, effort: effort ?? r.effort, tokens: r.tokens + used }
         }),
       )
       if (!matched) keepEarly(id, old => ({ ...old, model: model || old.model, effort: effort ?? old.effort, tokens: old.tokens + used }))
@@ -339,19 +381,19 @@ export const register: Register = on => {
         const ended = list.map(r => {
           if (r.agentId !== id) return r
           matched = true
-          if (r.status !== 'running') return r
-          finished = { ...r, status: end, endedAt: at, now: '', tokens: r.tokens || turnTokens }
+          if (!isLive(r)) return r
+          finished = { ...r, status: end, endedAt: at, lastSeenAt: at, now: '', tokens: r.tokens || turnTokens }
           return finished
         })
         // Remote agents never report an end: close them once every local agent of their workflow has ended.
         const g = finished?.group
-        const localLeft = ended.some(r => r.group === g && r.agentId && r.status === 'running')
-        return g && !localLeft ? ended.map(r => (r.group === g && !r.agentId && r.status === 'running' ? { ...r, status: 'done' as const, endedAt: at, now: '' } : r)) : ended
+        const localLeft = ended.some(r => r.group === g && r.agentId && isLive(r))
+        return g && !localLeft ? ended.map(r => (r.group === g && !r.agentId && isLive(r) ? { ...r, status: 'done' as const, endedAt: at, now: '' } : r)) : ended
       })
       if (!matched) keepEarly(id, old => ({ ...old, end, tokens: old.tokens || turnTokens }))
       if (finished?.status === 'done') void Promise.resolve($.ui.toast(`Done: ${clip(finished.task, 50)}`)).catch(() => {})
       // Once nothing runs, the next burst of agents may open the pane again, even if it was closed.
-      if (!(after ?? []).some(r => r.status === 'running')) autoOpened.clear()
+      if (!(after ?? []).some(isLive)) autoOpened.clear()
     } catch {}
     return next(e)
   })
@@ -364,7 +406,7 @@ export const register: Register = on => {
     const at = await $.clock.now()
     const budget = budgetOf(list)
     const clear = async () => {
-      const left = await update($, runs, l => l.filter(r => r.status === 'running'))
+      const left = await update($, runs, l => l.filter(isLive))
       // Titles go with their last row.
       const live = new Set((left ?? []).map(r => r.group))
       await update($, groups, g => Object.fromEntries(Object.entries(g ?? {}).filter(([k]) => live.has(k))))
@@ -381,8 +423,9 @@ export const register: Register = on => {
     // Groups, newest first; inside each, running agents first.
     const keys = [...new Set([...list].reverse().map(r => r.group))]
     const running = list.filter(r => r.status === 'running').length
+    const stalled = list.filter(r => r.status === 'stalled').length
     const total = list.reduce((s, r) => s + r.tokens, 0)
-    const summary = `${running} running · ${list.length - running} finished · ${fmtTokens(total)} tokens processed`
+    const summary = `${running} running${stalled ? ` · ${stalled} stalled` : ''} · ${list.length - running - stalled} finished · ${fmtTokens(total)} tokens processed`
     // The color key: only the model families in the pane, then how effort shows.
     const families = Object.keys(FAMILY).filter(f => list.some(r => familyOf(r.model) === f))
     const legend = (
@@ -398,10 +441,12 @@ export const register: Register = on => {
       const mean = members.reduce((s, r) => s + progressOf(r, budget).ratio, 0) / members.length
       const isEstimate = members.some(r => progressOf(r, budget).isEstimate)
       const live = members.filter(r => r.status === 'running').length
-      return `${groupTitle(k)}  ·  ${live ? `${live} running` : 'finished'}  ·  ${fmtTokens(members.reduce((s, r) => s + r.tokens, 0))} tokens processed  ·  ${pctText({ ratio: mean, isEstimate })}`
+      const quiet = members.filter(r => r.status === 'stalled').length
+      const state = [live ? `${live} running` : '', quiet ? `${quiet} stalled` : ''].filter(Boolean).join(', ') || 'finished'
+      return `${groupTitle(k)}  ·  ${state}  ·  ${fmtTokens(members.reduce((s, r) => s + r.tokens, 0))} tokens processed  ·  ${pctText({ ratio: mean, isEstimate })}`
     }
     const membersOf = (k: string) =>
-      list.filter(r => r.group === k).sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || a.startedAt - b.startedAt)
+      list.filter(r => r.group === k).sort((a, b) => Number(isLive(b)) - Number(isLive(a)) || a.startedAt - b.startedAt)
 
     // The terminal's element table carries an Svg that draws nothing: test the surface too.
     if (e.surface !== 'terminal' && 'Svg' in ui) {
@@ -412,7 +457,7 @@ export const register: Register = on => {
           <Box flexDirection="row" columnGap={1} alignItems="center">
             <Text bold>{summary}</Text>
             <Box flexGrow={1} />
-            {list.length > running ? <Button key="clear" variant="secondary" onPress={clear}>Clear Finished</Button> : null}
+            {list.length > running + stalled ? <Button key="clear" variant="secondary" onPress={clear}>Clear Finished</Button> : null}
           </Box>
           {legend}
           {keys.map(k => {
@@ -424,7 +469,7 @@ export const register: Register = on => {
                   <Svg
                     key={r.id}
                     source={runSvg(uidOf(r.id), W, r, budget, at)}
-                    alt={`${r.task}: ${modelName(r.model)}, ${fmtTokens(r.tokens)} tokens processed, ${pctText(progressOf(r, budget))}, ${r.status === 'running' ? 'now ' + r.now : r.status}`}
+                    alt={`${r.task}: ${modelName(r.model)}, ${fmtTokens(r.tokens)} tokens processed, ${pctText(progressOf(r, budget))}, ${nowLine(r)}`}
                     width={W}
                     height={84}
                   />
@@ -442,7 +487,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Text bold>{summary}</Text>
         {legend}
-        {list.length > running ? <Button key="clear" label="Clear Finished" plain onPress={clear} /> : null}
+        {list.length > running + stalled ? <Button key="clear" label="Clear Finished" plain onPress={clear} /> : null}
         {keys.map(k => (
           <Box key={'g-' + k} flexDirection="column" marginTop={1}>
             <Text bold color="#A096EB" wrap="truncate-end">{groupLine(k, membersOf(k))}</Text>
@@ -451,19 +496,19 @@ export const register: Register = on => {
               return (
                 <Box key={r.id} flexDirection="column" marginTop={1}>
                   <Text bold wrap="truncate-end">
-                    {r.status === 'running' ? '● ' : r.status === 'done' ? '✓ ' : '✗ '}
+                    {r.status === 'running' ? '● ' : r.status === 'stalled' ? '○ ' : r.status === 'done' ? '✓ ' : '✗ '}
                     {r.task || r.type}
                   </Text>
                   <Text dimColor wrap="truncate-end">
                     {'  '}
-                    <Text color={shadesOf(r)[1]}>{modelName(r.model) + (r.effort ? ' · ' + r.effort : '')}</Text>
+                    <Text color={rowShades(r)[1]}>{modelName(r.model) + (r.effort ? ' · ' + r.effort : '')}</Text>
                     {` · ${r.type} · ${fmtTokens(r.tokens)} tokens processed`}
                     {r.stepTotal ? ` · step ${r.stepDone ?? 0}/${r.stepTotal}` : ''}
                   </Text>
-                  {r.status === 'running' ? <Text wrap="truncate-end">{'  Now: ' + (r.now || 'thinking')}</Text> : null}
+                  {isLive(r) ? <Text wrap="truncate-end">{'  ' + nowLine(r)}</Text> : null}
                   <Text>
                     {'  '}
-                    {barCells(p.ratio, barW, r.status === 'failed', shadesOf(r)).map((c, i) =>
+                    {barCells(p.ratio, barW, r.status === 'failed', rowShades(r)).map((c, i) =>
                       c ? <Text key={'c' + i} color={c}>█</Text> : <Text key={'c' + i} dimColor>░</Text>,
                     )}
                     {' ' + pctText(p)}

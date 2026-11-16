@@ -1,4 +1,5 @@
-export type RunStatus = 'running' | 'done' | 'failed'
+/** 'stalled': still running as far as anyone knows, but nothing seen from it for 10 minutes. */
+export type RunStatus = 'running' | 'stalled' | 'done' | 'failed'
 
 export type Run = {
   id: string
@@ -14,6 +15,8 @@ export type Run = {
   status: RunStatus
   startedAt: number
   endedAt?: number
+  /** When the agent was last heard from: its spawn, a step or a tool call. */
+  lastSeenAt?: number
   /** Every token of every request: input, output, cache reads and writes. */
   tokens: number
   /** What the agent is doing now: its latest tool call, in a few words. */

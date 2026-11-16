@@ -10,6 +10,8 @@ The pane opens by itself when a workflow starts or when two subagents run at the
 
 An agent a workflow runs remotely has no local loop, so its row says "running remotely, no live detail" and closes when the rest of its workflow finishes.
 
+If nothing is heard from an agent for 10 minutes (no request, no tool call), its row turns gray and says "Stalled". That catches the cases no event ever closes, like a stuck agent the engine retried under a new id. The row comes back to life the moment the agent does anything.
+
 ## Colors
 
 The model decides the bar's color. Fable is purple, Opus is coral, Sonnet is blue and Haiku is teal; anything else is gray. Higher effort starts the bar on a deeper shade, so an Opus agent on max looks darker than one on low. The key at the top of the pane lists only the models you can see.

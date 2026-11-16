@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { brief, budgetOf, familyOf, progressOf, redact, shadesOf, workflowTitle } from './register'
+import { brief, budgetOf, familyOf, markStalled, progressOf, redact, shadesOf, STALL_MS, workflowTitle } from './register'
 
 const PANE = {
   plugin: 'relay',
@@ -33,6 +33,12 @@ test('helpers', async () => {
   expect(budgetOf([{ ...run, status: 'done', tokens: 3_000 }])).toBe(100_000)
   // A stopped run keeps where it got to instead of a full bar.
   expect(pct(300_000, 300_000)).toBe(Math.round(progressOf({ ...run, status: 'failed' }, 300_000).ratio * 100))
+  // Quiet for more than 10 minutes: stalled. Recently heard from, finished, or nothing to change: left alone.
+  const quiet = { ...run, startedAt: 0, lastSeenAt: 0 }
+  expect(markStalled([quiet], STALL_MS - 1)).toBe(null)
+  expect(markStalled([quiet], STALL_MS + 1)?.[0]?.status).toBe('stalled')
+  expect(markStalled([{ ...quiet, lastSeenAt: STALL_MS }], STALL_MS + 1)).toBe(null)
+  expect(markStalled([{ ...quiet, status: 'done' }], STALL_MS * 3)).toBe(null)
   // Model picks the hue, effort how deep the bar starts.
   expect(familyOf('claude-sonnet-5-5')).toBe('sonnet')
   expect(familyOf('gpt-x')).toBe('other')
