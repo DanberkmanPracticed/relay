@@ -22,6 +22,12 @@ The model decides the bar's color. Fable is purple, Opus is coral, Sonnet is blu
 
 Claude Code doesn't tell a mod how big an agent's job is, so the percent is a guess, and it says so with "≈". Relay divides the tokens an agent has used by the average used by agents that already finished in the session, or by 600k if none have finished yet (never less than 100k, so one quick lookup doesn't skew it). The bar slows down as it climbs, so a long run keeps moving instead of parking near the top, and it won't go past 95% until the agent is actually done. An agent that stops early keeps the percent it reached, in red.
 
+For exact numbers, turn on the Exact Steps setting. Relay then adds one line to each agent's instructions asking it to report its plan and steps through Relay's own `step` tool, and the row shows "step 3/5" with a percent that isn't a guess. It costs each agent a few tiny tool calls. It's off by default because it changes every agent's instructions. Turn it on in `/config`, or in `~/.claude/settings.json`:
+
+```json
+{ "pluginConfigs": { "relay": { "options": { "exactSteps": true } } } }
+```
+
 ## Install
 
 At the prompt of a Claude Code terminal session:

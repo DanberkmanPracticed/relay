@@ -21,6 +21,9 @@ export type Run = {
   tokens: number
   /** What the agent is doing now: its latest tool call, in a few words. */
   now: string
+  /** Steps the agent reported through Relay's own step tool (the Exact Steps setting). */
+  stepDone?: number
+  stepTotal?: number
 }
 
 /** A group's title, by its key. */

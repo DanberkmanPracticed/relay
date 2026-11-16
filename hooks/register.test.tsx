@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { brief, budgetOf, familyOf, markStalled, progressOf, redact, shadesOf, STALL_MS, workflowTitle } from './register'
+import { brief, budgetOf, familyOf, markStalled, progressOf, redact, shadesOf, STALL_MS, STEP_TOOL, workflowTitle } from './register'
 
 const PANE = {
   plugin: 'relay',
@@ -129,3 +129,44 @@ test('a remote workflow agent closes when its workflow\'s local agents end', asy
   await ui.unmount()
 })
 
+
+test('Exact Steps on: the brief asks for steps and the pane shows them', { options: { exactSteps: true } }, async ($, on) => {
+  let prompt = ''
+  on('command.register', () => ({ value: { command: 'relay' } }))
+  on('tool.register', () => ({ value: { tool: STEP_TOOL } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.now', () => ({ value: 1000 }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('tool.call', () => ({ result: {} }))
+  on('agent.spawn', (_, e) => ((prompt = e.prompt), { model: 'claude-sonnet-5-5', agentId: 'ag3' }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({ prompt: 'Do the thing.', description: 'Steps', subagentType: 'general-purpose', tool_use_id: 'y' } as never)
+  expect(prompt).toMatch(/^Do the thing\.[\s\S]*mcp__relay__step/)
+
+  await $.tool.call({ tool: STEP_TOOL, agentId: 'ag3', total: 5, done: 2, note: 'Reading files' } as never)
+  let ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /step / }))?.text).toMatch(/step 2\/5/)
+  expect((await ui.find({ type: 'Text', text: /Now:/ }))?.text).toMatch(/Reading files/)
+  await ui.unmount()
+
+  // A step count that is not a number is ignored, never NaN.
+  await $.tool.call({ tool: STEP_TOOL, agentId: 'ag3', total: 5, done: '3/5' } as never)
+  ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /step / }))?.text).toMatch(/step 2\/5/)
+  expect(await ui.find({ type: 'Text', text: /NaN/ })).toBeFalsy()
+  await ui.unmount()
+})
+
+test('Exact Steps off (the default): the brief is left as it was', async ($, on) => {
+  let prompt = ''
+  on('command.register', () => ({ value: { command: 'relay' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('clock.now', () => ({ value: 1000 }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('agent.spawn', (_, e) => ((prompt = e.prompt), { model: 'claude-sonnet-5-5', agentId: 'ag4' }))
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.agent.spawn({ prompt: 'Do the thing.', description: 'Plain', subagentType: 'general-purpose', tool_use_id: 'z' } as never)
+  expect(prompt).toBe('Do the thing.')
+})

@@ -4,7 +4,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Groups, Run } from '../types'
 
 // A shape name per atom: when Run changes, bump it and older stored values are dropped instead of misread.
-const runs = atom({ plugin: 'relay', key: 'runs' } as const, [], { shape: 'runs-3' })
+const runs = atom({ plugin: 'relay', key: 'runs' } as const, [], { shape: 'runs-4' })
 const groups = atom({ plugin: 'relay', key: 'groups' } as const, {}, { shape: 'groups-1' })
 
 const PANE = 'relay'
@@ -108,10 +108,11 @@ export function budgetOf(list: readonly Run[]): number {
   return done.length ? Math.max(MIN_BUDGET, done.reduce((s, r) => s + r.tokens, 0) / done.length) : DEFAULT_BUDGET
 }
 
-// The fraction done and whether it is a guess (only a finished run is not).
+// The fraction done and whether it is a guess: a finished run and reported steps are not.
 // A stopped run keeps where it got to, never a full bar.
 export function progressOf(r: Run, budget: number): { ratio: number; isEstimate: boolean } {
   if (r.status === 'done') return { ratio: 1, isEstimate: false }
+  if (r.stepTotal) return { ratio: Math.min(1, (r.stepDone ?? 0) / r.stepTotal), isEstimate: false }
   // An easing curve, so a long run keeps moving instead of parking at the cap: one budget reads ≈60%, two ≈82%, three ≈90%.
   return { ratio: MAX_ESTIMATE * (1 - Math.exp(-r.tokens / Math.max(1, budget))), isEstimate: true }
 }
@@ -201,7 +202,7 @@ export function runSvg(uid: string, W: number, r: Run, budget: number, at: numbe
 ${dot}
 <text class="t" x="18" y="17" font-family="${FONT}" font-size="13" font-weight="600">${xml(clip(r.task || r.type, chars))}</text>
 <text x="${W}" y="17" text-anchor="end" font-family="${FONT}" font-size="15" font-weight="700" fill="${r.status === 'failed' ? '#D0453F' : color}">${pctText(p)}</text>
-<text x="18" y="35" font-family="${FONT}" font-size="11"><tspan fill="${color}" font-weight="600">${xml(modelName(r.model) + (r.effort ? ' · ' + r.effort : ''))}</tspan><tspan class="s">${xml(clip(`  ·  ${r.type}`, chars))}</tspan></text>
+<text x="18" y="35" font-family="${FONT}" font-size="11"><tspan fill="${color}" font-weight="600">${xml(modelName(r.model) + (r.effort ? ' · ' + r.effort : ''))}</tspan><tspan class="s">${xml(clip(`  ·  ${r.type}${r.stepTotal ? `  ·  step ${r.stepDone ?? 0}/${r.stepTotal}` : ''}`, chars))}</tspan></text>
 <text class="s" x="${W}" y="35" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${fmtTokens(r.tokens)} tokens processed</text>
 <text class="t" x="18" y="52" font-family="${FONT}" font-size="11.5" font-style="italic">${xml(clip(now, chars + 8))}</text>
 <g transform="translate(0,62)">${barSvg(uid, W, p.ratio, r.status, at, shades)}</g>
@@ -241,10 +242,41 @@ export function markStalled(list: readonly Run[], at: number): Run[] | null {
   return list.some(quiet) ? list.map(r => (quiet(r) ? { ...r, status: 'stalled' as const } : r)) : null
 }
 
-export const register: Register = on => {
+// Exact Steps (a setting, off by default): Relay's own step tool, and one line added to each agent's brief asking it to report.
+export const STEP_TOOL = 'mcp__relay__step'
+export const STEP_BRIEF = `
+
+Progress reporting: before other work, call \`${STEP_TOOL}\` with \`total\` (your plan in 3-8 steps) and \`done: 0\`; call it again with \`done\` and a few-word \`note\` as each step finishes. It only updates a progress bar.`
+
+// A number an agent reported, or the fallback when it sent none or something that is not a number ("3/5").
+const num = (v: unknown, fallback: number): number => {
+  const n = Number(v)
+  return v === undefined || !Number.isFinite(n) ? fallback : Math.max(0, Math.round(n))
+}
+
+export const register: Register = (on, options) => {
+  const exactSteps = options.exactSteps === true
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({ name: 'relay', description: 'Show the live pane of running agents and subagents' })
+    if (exactSteps)
+      await $.tool.register({
+        name: 'step',
+        description:
+          "Report progress on your own task to the Relay pane. Right after reading your brief, call it with `total` (your plan in 3-8 steps) and `done: 0`; call it again as each step finishes. Cheap and silent: it only draws a bar.",
+        inputSchema: {
+          type: 'object',
+          properties: {
+            done: { type: 'integer', minimum: 0, description: 'Steps finished so far.' },
+            total: { type: 'integer', minimum: 1, description: 'Steps planned; may change if the plan changes.' },
+            note: { type: 'string', description: 'The step in progress, a few words.' },
+          },
+          required: ['done'],
+        },
+        // In every agent's tool list, not behind a search: agents do not go looking for it.
+        isDeferred: false,
+      })
     // Once a minute, mark quiet rows stalled. Quiet when nothing runs: no write, no redraw.
     $.clock.every(60_000, () => {
       void (async () => {
@@ -272,10 +304,30 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e)) // a bystander: on any failure the call goes ahead untouched
 
+  // An agent's own step report (Exact Steps). The call is Relay's own tool, so Relay answers it.
+  on('tool.call', { tool: STEP_TOOL }, async ($, e) => {
+    const id = e.agentId
+    if (!id) return { result: 'ignored: only agents report steps' }
+    const input = e as unknown as Record<string, unknown>
+    try {
+      const at = await $.clock.now()
+      await update($, runs, list =>
+        list.map(r => {
+          if (r.agentId !== id) return r
+          const total = num(input.total, r.stepTotal ?? 0)
+          const done = num(input.done, r.stepDone ?? 0)
+          const note = typeof input.note === 'string' && input.note ? clip(redact(input.note), 60) : r.now
+          return { ...r, stepTotal: total || undefined, stepDone: total ? Math.min(total, done) : done, now: note, lastSeenAt: at, status: r.status === 'stalled' ? ('running' as const) : r.status }
+        }),
+      )
+    } catch {}
+    return { result: 'ok' }
+  })
+
   // Every tool call inside an agent's loop is what that agent is doing now.
   on('tool.call', async ($, e, next) => {
     const id = e.agentId
-    if (id) try {
+    if (id && e.tool !== STEP_TOOL) try {
       const now = brief(e as unknown as Record<string, unknown>)
       // Not awaited: the tool call goes ahead without waiting for the pane.
       void (async () => {
@@ -292,7 +344,9 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   on('agent.spawn', async ($, e, next) => {
-    const started = await next(e)
+    // Exact Steps: one line at the end of a new agent's brief. A resumed run keeps its prompt; a brief that already asks is left alone.
+    const ask = exactSteps && !e.resume && !e.prompt.includes(STEP_TOOL)
+    const started = await next(ask ? { ...e, prompt: e.prompt + STEP_BRIEF } : e)
     if (started.deny !== undefined) return started
     // After next() the spawn has happened: a failure here must not fail it.
     try {
@@ -487,7 +541,8 @@ export const register: Register = on => {
                   <Text dimColor wrap="truncate-end">
                     {'  '}
                     <Text color={rowShades(r)[1]}>{modelName(r.model) + (r.effort ? ' · ' + r.effort : '')}</Text>
-                    {` · ${r.type} · ${fmtTokens(r.tokens)} tokens processed`}                  </Text>
+                    {` · ${r.type} · ${fmtTokens(r.tokens)} tokens processed`}
+                    {r.stepTotal ? ` · step ${r.stepDone ?? 0}/${r.stepTotal}` : ''}                  </Text>
                   {isLive(r) ? <Text wrap="truncate-end">{'  ' + nowLine(r)}</Text> : null}
                   <Text>
                     {'  '}
