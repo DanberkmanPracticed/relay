@@ -1,5 +1,6 @@
 {
   "name": "relay",
   "owner": { "name": "Daniel Berkman" },
+  "description": "Relay: a live pane of every running Claude Code agent and subagent",
   "plugins": [{ "name": "relay", "source": "./" }]
 }

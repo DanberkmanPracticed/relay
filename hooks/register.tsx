@@ -11,6 +11,7 @@ const TITLE = 'Relay'
 const STEP_TOOL = 'mcp__savvy-progress__step'
 // shortcut: percent complete is tokens used over a guessed budget; upgrade if the engine ever reports a real plan size.
 const DEFAULT_BUDGET = 600_000
+const MIN_BUDGET = 100_000
 // An estimate never reads 100% until the agent has actually finished.
 const MAX_ESTIMATE = 0.95
 // One hue per model family, deep / mid / light (the chat's purple, coral, blue and teal ramps).
@@ -44,6 +45,16 @@ const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
 // Which groups the pane already opened itself for; starting over on a reload only reopens it once more.
 const autoOpened = new Set<string>()
 
+// A fast agent can step or even finish before agent.spawn's next() returns its id, so its row does not exist yet.
+// Those events wait here and are applied when the row is added.
+type Early = { tokens: number; model?: string; effort?: string; end?: Run['status'] }
+const early = new Map<string, Early>()
+const keepEarly = (id: string, change: (old: Early) => Early) => {
+  early.set(id, change(early.get(id) ?? { tokens: 0 }))
+  // Loops with no agent.spawn (forked skills) never claim theirs: keep only the latest few.
+  if (early.size > 100) early.delete(early.keys().next().value as string)
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for the test).
 
@@ -57,7 +68,11 @@ export const modelName = (id: string): string => {
   return `${family.charAt(0).toUpperCase()}${family.slice(1).toLowerCase()} ${major}${minor ? '.' + minor : ''}`
 }
 
-const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 1) + '…' : s)
+// By code point, so an emoji is never cut in half.
+const clip = (s: string, n: number): string => {
+  const cps = Array.from(s)
+  return cps.length > n ? cps.slice(0, n - 1).join('') + '…' : s
+}
 const base = (p: string): string => p.split(/[\\/]/).pop() || p
 
 // A tool call in a few words: "Edit register.tsx", "Bash npm test".
@@ -77,14 +92,16 @@ export function brief(e: Record<string, unknown>): string {
 }
 
 // Tokens a run of this session usually takes: the mean of the finished ones, else the default.
+// The floor keeps one tiny finished lookup from pushing every other bar to the cap.
 export function budgetOf(list: readonly Run[]): number {
   const done = list.filter(r => r.status === 'done' && r.tokens > 0)
-  return done.length ? done.reduce((s, r) => s + r.tokens, 0) / done.length : DEFAULT_BUDGET
+  return done.length ? Math.max(MIN_BUDGET, done.reduce((s, r) => s + r.tokens, 0) / done.length) : DEFAULT_BUDGET
 }
 
 // The fraction done and whether it is a guess: steps the agent reported are not.
+// A stopped run keeps where it got to, never a full bar.
 export function progressOf(r: Run, budget: number): { ratio: number; isEstimate: boolean } {
-  if (r.status !== 'running') return { ratio: 1, isEstimate: false }
+  if (r.status === 'done') return { ratio: 1, isEstimate: false }
   if (r.stepTotal) return { ratio: Math.min(1, (r.stepDone ?? 0) / r.stepTotal), isEstimate: false }
   // An easing curve, so a long run keeps moving instead of parking at the cap: one budget reads ≈60%, two ≈82%, three ≈90%.
   return { ratio: MAX_ESTIMATE * (1 - Math.exp(-r.tokens / Math.max(1, budget))), isEstimate: true }
@@ -106,8 +123,9 @@ export function workflowTitle(e: Record<string, unknown>): string {
 // ---------------------------------------------------------------------------
 // Desktop drawing: every row is one SVG, so nothing wraps.
 
+// Control characters (an ESC in a Bash command) are not allowed in XML and would blank the whole row.
 const xml = (s: string): string =>
-  s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
+  s.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] ?? c)
 
 const CSS = `.t{fill:#1f1f1f}.s{fill:#6b6b68}.k{fill:#ecebe8}
 @media (prefers-color-scheme: dark){.t{fill:#ececec}.s{fill:#a8a8a4}.k{fill:#2c2c2b}}
@@ -184,7 +202,13 @@ async function maybeOpen($: EngineInterface, key: string, isWorkflow: boolean): 
   // A lone subagent is not a multi-agent run: open for a workflow, or once two agents run together.
   if (!isWorkflow && running < 2) return
   autoOpened.add(key)
-  void $.ui.open({ id: PANE, title: TITLE })
+  void $.ui.open({ id: PANE, title: TITLE }).catch(() => {})
+}
+
+// A number an agent reported, or the fallback when it sent none or something that is not a number ("3/5").
+const num = (v: unknown, fallback: number): number => {
+  const n = Number(v)
+  return v === undefined || !Number.isFinite(n) ? fallback : Math.max(0, Math.round(n))
 }
 
 export const register: Register = on => {
@@ -219,8 +243,8 @@ export const register: Register = on => {
         list.map(r => {
           if (r.agentId !== id) return r
           if (!isStep) return { ...r, now: brief(input) }
-          const total = Number(input.total ?? r.stepTotal ?? 0)
-          const done = Number(input.done ?? r.stepDone ?? 0)
+          const total = num(input.total, r.stepTotal ?? 0)
+          const done = num(input.done, r.stepDone ?? 0)
           return { ...r, stepTotal: total || undefined, stepDone: total ? Math.min(total, done) : done, now: typeof input.note === 'string' && input.note ? clip(input.note, 60) : r.now }
         }),
       )
@@ -231,27 +255,34 @@ export const register: Register = on => {
   on('agent.spawn', async ($, e, next) => {
     const started = await next(e)
     if (started.deny !== undefined) return started
-    const isWorkflow = !!e.workflow
-    const group = isWorkflow ? e.tool_use_id || e.workflow?.runId || 'workflow' : e.parentAgentId ? `sub:${e.parentAgentId}` : 'main'
-    const at = await $.clock.now()
-    const run: Run = {
-      id: started.agentId ?? `${e.tool_use_id}:${e.workflow?.agentIndex ?? at}`,
-      agentId: started.agentId,
-      group,
-      task: e.description || e.subagentType,
-      type: e.subagentType || 'agent',
-      model: started.model,
-      status: 'running',
-      startedAt: at,
-      tokens: 0,
-      now: 'starting',
-    }
-    await update($, runs, list => [...list.filter(r => r.id !== run.id), run].slice(-200))
-    if (!isWorkflow && e.parentAgentId) {
-      const parent = (await read($, runs)).find(r => r.agentId === e.parentAgentId)
-      await update($, groups, g => ({ ...g, [group]: `Spawned by ${parent?.task ?? 'a subagent'}` }))
-    }
-    await maybeOpen($, group, isWorkflow)
+    // After next() the spawn has happened: a failure here must not fail it.
+    try {
+      const isWorkflow = !!e.workflow
+      const group = isWorkflow ? e.tool_use_id || e.workflow?.runId || 'workflow' : e.parentAgentId ? `sub:${e.parentAgentId}` : 'main'
+      const at = await $.clock.now()
+      const seen = started.agentId ? early.get(started.agentId) : undefined
+      if (started.agentId) early.delete(started.agentId)
+      const run: Run = {
+        id: started.agentId ?? `${e.tool_use_id}:${e.workflow?.agentIndex ?? at}`,
+        agentId: started.agentId,
+        group,
+        task: e.description || e.subagentType,
+        type: e.subagentType || 'agent',
+        model: seen?.model || started.model,
+        effort: seen?.effort,
+        status: seen?.end ?? 'running',
+        startedAt: at,
+        endedAt: seen?.end ? at : undefined,
+        tokens: seen?.tokens ?? 0,
+        now: seen?.end ? '' : 'starting',
+      }
+      await update($, runs, list => [...list.filter(r => r.id !== run.id), run].slice(-200))
+      if (!isWorkflow && e.parentAgentId) {
+        const parent = (await read($, runs)).find(r => r.agentId === e.parentAgentId)
+        await update($, groups, g => ({ ...g, [group]: `Spawned by ${parent?.task ?? 'a subagent'}` }))
+      }
+      await maybeOpen($, group, isWorkflow)
+    } catch {}
     return started
   })
 
@@ -262,24 +293,41 @@ export const register: Register = on => {
     const u = result.usage
     if (!id || !u) return result
     const used = (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)
-    await update($, runs, list => list.map(r => (r.agentId === id ? { ...r, model: u.model || e.model || r.model, effort: typeof e.effort === 'string' ? e.effort : r.effort, tokens: r.tokens + used } : r)))
+    const model = u.model || e.model
+    const effort = typeof e.effort === 'string' ? e.effort : undefined
+    try {
+      let matched = false
+      await update($, runs, list =>
+        list.map(r => {
+          if (r.agentId !== id) return r
+          matched = true
+          return { ...r, model: model || r.model, effort: effort ?? r.effort, tokens: r.tokens + used }
+        }),
+      )
+      if (!matched) keepEarly(id, old => ({ ...old, model: model || old.model, effort: effort ?? old.effort, tokens: old.tokens + used }))
+    } catch {}
     return result
   })
 
   on('turn.complete', async ($, e, next) => {
     const id = e.agentId
-    if (id) {
+    if (id) try {
       const at = await $.clock.now()
+      const end: Run['status'] = e.reason === 'answer' ? 'done' : 'failed'
+      let matched = false
       let finished: Run | undefined
       await update($, runs, list =>
         list.map(r => {
-          if (r.agentId !== id || r.status !== 'running') return r
-          finished = { ...r, status: e.reason === 'answer' ? 'done' : 'failed', endedAt: at, now: '' }
+          if (r.agentId !== id) return r
+          matched = true
+          if (r.status !== 'running') return r
+          finished = { ...r, status: end, endedAt: at, now: '' }
           return finished
         }),
       )
-      if (finished?.status === 'done') $.ui.toast(`Done: ${clip(finished.task, 50)}`)
-    }
+      if (!matched) keepEarly(id, old => ({ ...old, end }))
+      if (finished?.status === 'done') void Promise.resolve($.ui.toast(`Done: ${clip(finished.task, 50)}`)).catch(() => {})
+    } catch {}
     return next(e)
   })
 
@@ -290,7 +338,12 @@ export const register: Register = on => {
     const titles: Groups = await read($, groups)
     const at = await $.clock.now()
     const budget = budgetOf(list)
-    const clear = () => update($, runs, l => l.filter(r => r.status === 'running'))
+    const clear = async () => {
+      const left = await update($, runs, l => l.filter(r => r.status === 'running'))
+      // Titles go with their last row.
+      const live = new Set((left ?? []).map(r => r.group))
+      await update($, groups, g => Object.fromEntries(Object.entries(g ?? {}).filter(([k]) => live.has(k))))
+    }
 
     if (list.length === 0) {
       return (
