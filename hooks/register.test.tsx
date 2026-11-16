@@ -13,6 +13,7 @@ test('helpers', async () => {
   expect(brief({ tool: 'Edit', file_path: 'C:\\a\\b\\register.tsx' })).toBe('Edit register.tsx')
   expect(brief({ tool: 'Bash', command: 'npm   test' })).toBe('Bash npm test')
   expect(workflowTitle({ script: "export const meta = { name: 'review-changes', description: 'x' }" })).toBe('review-changes')
+  expect(workflowTitle({ scriptPath: 'C:\\x\\scripts\\relay-screenshot-long-wf_c18520bb-83b.js' })).toBe('relay-screenshot-long')
   const run = { id: 'a', group: 'g', task: 't', type: 'x', model: 'm', status: 'running' as const, startedAt: 0, tokens: 300_000, now: '' }
   const pct = (tokens: number, budget: number) => Math.round(progressOf({ ...run, tokens }, budget).ratio * 100)
   expect(pct(300_000, 300_000)).toBe(60)

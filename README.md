@@ -34,7 +34,11 @@ claude plugin install relay --marketplace DanberkmanPracticed/relay
 
 ## Using it
 
-Type `/relay` to open the pane yourself. Clear Finished removes the agents that are done. In a terminal the pane is drawn in text, with the bar as colored blocks. If your system asks for reduced motion, the stripes stop moving.
+Type `/relay` to open the pane yourself. Clear Finished removes the agents that are done. If your system asks for reduced motion, the stripes stop moving.
+
+In a terminal session, type `/relay` to bring the pane up. It's drawn in text there, with each bar as blocks in the model's colors:
+
+<img src="assets/pane-cli.png" width="680" alt="The Relay pane in a terminal: three finished agents on Opus, Sonnet and Haiku, each with a colored block bar at 100%">
 
 ## License
 

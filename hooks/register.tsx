@@ -99,7 +99,7 @@ export function workflowTitle(e: Record<string, unknown>): string {
   const m = /name\s*:\s*['"`]([^'"`]+)['"`]/.exec(script) ?? /description\s*:\s*['"`]([^'"`]+)['"`]/.exec(script)
   if (m?.[1]) return m[1]
   if (typeof e.name === 'string' && e.name) return e.name
-  if (typeof e.scriptPath === 'string' && e.scriptPath) return base(e.scriptPath).replace(/\.[^.]+$/, '')
+  if (typeof e.scriptPath === 'string' && e.scriptPath) return base(e.scriptPath).replace(/\.[^.]+$/, '').replace(/-wf_[\w-]+$/, '') // saved scripts end in their run id
   return 'Workflow'
 }
 
