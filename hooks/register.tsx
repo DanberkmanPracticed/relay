@@ -254,29 +254,40 @@ const num = (v: unknown, fallback: number): number => {
   return v === undefined || !Number.isFinite(n) ? fallback : Math.max(0, Math.round(n))
 }
 
+// Registered at session start, or by the first spawn when the module loaded mid-session (a reload or a settings change), which never sees session.start.
+let stepReady = false
+async function registerStep($: { tool: { register(spec: any): Promise<unknown> } }) {
+  if (stepReady) return
+  stepReady = true
+  try {
+    await $.tool.register({
+      name: 'step',
+      description:
+        "Report progress on your own task to the Relay pane. Right after reading your brief, call it with `total` (your plan in 3-8 steps) and `done: 0`; call it again as each step finishes. Cheap and silent: it only draws a bar.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          done: { type: 'integer', minimum: 0, description: 'Steps finished so far.' },
+          total: { type: 'integer', minimum: 1, description: 'Steps planned; may change if the plan changes.' },
+          note: { type: 'string', description: 'The step in progress, a few words.' },
+        },
+        required: ['done'],
+      },
+      // In every agent's tool list, not behind a search: agents do not go looking for it.
+      isDeferred: false,
+    })
+  } catch {
+    // Already registered by an earlier load: nothing to do.
+  }
+}
+
 export const register: Register = (on, options) => {
   const exactSteps = options.exactSteps === true
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     await $.command.register({ name: 'relay', description: 'Show the live pane of running agents and subagents' })
-    if (exactSteps)
-      await $.tool.register({
-        name: 'step',
-        description:
-          "Report progress on your own task to the Relay pane. Right after reading your brief, call it with `total` (your plan in 3-8 steps) and `done: 0`; call it again as each step finishes. Cheap and silent: it only draws a bar.",
-        inputSchema: {
-          type: 'object',
-          properties: {
-            done: { type: 'integer', minimum: 0, description: 'Steps finished so far.' },
-            total: { type: 'integer', minimum: 1, description: 'Steps planned; may change if the plan changes.' },
-            note: { type: 'string', description: 'The step in progress, a few words.' },
-          },
-          required: ['done'],
-        },
-        // In every agent's tool list, not behind a search: agents do not go looking for it.
-        isDeferred: false,
-      })
+    if (exactSteps) await registerStep($)
     // Once a minute, mark quiet rows stalled. Quiet when nothing runs: no write, no redraw.
     $.clock.every(60_000, () => {
       void (async () => {
@@ -346,6 +357,7 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     // Exact Steps: one line at the end of a new agent's brief. A resumed run keeps its prompt; a brief that already asks is left alone.
     const ask = exactSteps && !e.resume && !e.prompt.includes(STEP_TOOL)
+    if (ask) await registerStep($)
     const started = await next(ask ? { ...e, prompt: e.prompt + STEP_BRIEF } : e)
     if (started.deny !== undefined) return started
     // After next() the spawn has happened: a failure here must not fail it.

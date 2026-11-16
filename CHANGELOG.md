@@ -2,6 +2,10 @@
 
 Relay follows semantic versioning: the minor number goes up for new behavior, the patch number for fixes.
 
+## 0.5.1 (2026-11-16)
+
+- Exact Steps now works when the setting is turned on in a session that is already running: the step tool is set up when the first agent starts, not only at session start.
+
 ## 0.5.0 (2026-11-16)
 
 - New Exact Steps setting, off by default: Relay adds one line to each agent's instructions asking it to report its steps through Relay's own `step` tool, and the row shows an exact "step 3/5". No other plugin needed.
