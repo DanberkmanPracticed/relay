@@ -2,7 +2,7 @@
 
 Relay is a Claude Code mod that keeps a pane next to the chat showing every agent and subagent while it works. When a workflow fans out to several agents, it's hard to tell who is doing what without opening each one.
 
-![The Relay pane during a workflow: an Opus agent still reading, a Sonnet agent at step 4 of 5, and a Haiku agent finished](assets/pane.png)
+<img src="assets/pane.png" width="680" alt="The Relay pane during a workflow: an Opus agent still reading, a Sonnet agent at step 4 of 5, and a Haiku agent finished">
 
 The pane opens by itself when a workflow starts or when two subagents run at the same time. Agents sit under the workflow's name, or under "Subagents" when they weren't started by a workflow. Each row has the task the agent was given and what it's doing right now, which is its latest tool call ("Edit register.tsx", "Bash npm test"). It also shows the model and effort, the tokens used so far, and a progress bar with slow-moving stripes.
 
