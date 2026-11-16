@@ -2,6 +2,10 @@
 
 Relay follows semantic versioning: the minor number goes up for new behavior, the patch number for fixes.
 
+## 0.4.0 (2026-11-16)
+
+- Removed the savvy-progress step reporting. Relay depends on no other plugin; every percent is its own estimate.
+
 ## 0.3.0 (2026-11-16)
 
 - A row with no activity for 10 minutes turns gray and says "Stalled", so a stuck or retried agent no longer reads as running forever. Any later activity brings it back.

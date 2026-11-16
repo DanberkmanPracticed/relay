@@ -27,7 +27,6 @@ test('helpers', async () => {
   expect(pct(900_000, 300_000)).toBe(90)
   expect(pct(9e9, 600_000)).toBe(95)
   expect(progressOf(run, 300_000).isEstimate).toBe(true)
-  expect(progressOf({ ...run, stepDone: 1, stepTotal: 4 }, 600_000)).toEqual({ ratio: 0.25, isEstimate: false })
   expect(budgetOf([{ ...run, status: 'done', tokens: 400_000 }])).toBe(400_000)
   // One tiny finished lookup does not make every other bar jump to the cap.
   expect(budgetOf([{ ...run, status: 'done', tokens: 3_000 }])).toBe(100_000)
@@ -130,20 +129,3 @@ test('a remote workflow agent closes when its workflow\'s local agents end', asy
   await ui.unmount()
 })
 
-test('a step count that is not a number is ignored', async ($, on) => {
-  on('command.register', () => ({ value: { command: 'relay' } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('clock.now', () => ({ value: 1000 }))
-  on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('tool.call', () => ({ result: {} }))
-  on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: 'ag3' }))
-
-  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  await $.agent.spawn({ prompt: 'p', description: 'Steps', subagentType: 'general-purpose', tool_use_id: 'y' } as never)
-  await $.tool.call({ tool: 'mcp__savvy-progress__step', agentId: 'ag3', total: 5, done: '3/5' } as never)
-
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await ui.find({ type: 'Text', text: /step / }))?.text).toMatch(/step 0\/5/)
-  expect(await ui.find({ type: 'Text', text: /NaN/ })).toBeFalsy()
-  await ui.unmount()
-})

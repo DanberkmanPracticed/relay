@@ -1,1 +1,1 @@
-{ "name": "relay", "version": "0.3.0", "description": "A live pane of every running agent and subagent: task, current step, model, tokens and an estimated percent complete", "author": { "name": "Daniel Berkman" }, "license": "MIT", "types": "./types/index.d.ts" }
+{ "name": "relay", "version": "0.4.0", "description": "A live pane of every running agent and subagent: task, current step, model, tokens and an estimated percent complete", "author": { "name": "Daniel Berkman" }, "license": "MIT", "types": "./types/index.d.ts" }

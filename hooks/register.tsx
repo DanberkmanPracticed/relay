@@ -4,12 +4,11 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Groups, Run } from '../types'
 
 // A shape name per atom: when Run changes, bump it and older stored values are dropped instead of misread.
-const runs = atom({ plugin: 'relay', key: 'runs' } as const, [], { shape: 'runs-2' })
+const runs = atom({ plugin: 'relay', key: 'runs' } as const, [], { shape: 'runs-3' })
 const groups = atom({ plugin: 'relay', key: 'groups' } as const, {}, { shape: 'groups-1' })
 
 const PANE = 'relay'
 const TITLE = 'Relay'
-const STEP_TOOL = 'mcp__savvy-progress__step'
 // shortcut: percent complete is tokens used over a guessed budget; upgrade if the engine ever reports a real plan size.
 const DEFAULT_BUDGET = 600_000
 const MIN_BUDGET = 100_000
@@ -109,11 +108,10 @@ export function budgetOf(list: readonly Run[]): number {
   return done.length ? Math.max(MIN_BUDGET, done.reduce((s, r) => s + r.tokens, 0) / done.length) : DEFAULT_BUDGET
 }
 
-// The fraction done and whether it is a guess: steps the agent reported are not.
+// The fraction done and whether it is a guess (only a finished run is not).
 // A stopped run keeps where it got to, never a full bar.
 export function progressOf(r: Run, budget: number): { ratio: number; isEstimate: boolean } {
   if (r.status === 'done') return { ratio: 1, isEstimate: false }
-  if (r.stepTotal) return { ratio: Math.min(1, (r.stepDone ?? 0) / r.stepTotal), isEstimate: false }
   // An easing curve, so a long run keeps moving instead of parking at the cap: one budget reads ≈60%, two ≈82%, three ≈90%.
   return { ratio: MAX_ESTIMATE * (1 - Math.exp(-r.tokens / Math.max(1, budget))), isEstimate: true }
 }
@@ -198,13 +196,12 @@ export function runSvg(uid: string, W: number, r: Run, budget: number, at: numbe
         ? `<path d="M1 13l3.5 3.5 6.5-7" fill="none" stroke="#3B9C5F" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`
         : `<path d="M2 9l8 8M10 9l-8 8" stroke="#D0453F" stroke-width="2" stroke-linecap="round"/>`
   const chars = Math.max(10, Math.floor((W - 90) / 7))
-  const steps = r.stepTotal ? `  ·  step ${r.stepDone ?? 0}/${r.stepTotal}` : ''
   const now = nowLine(r)
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="84" viewBox="0 0 ${W} 84"><style>${CSS}</style>
 ${dot}
 <text class="t" x="18" y="17" font-family="${FONT}" font-size="13" font-weight="600">${xml(clip(r.task || r.type, chars))}</text>
 <text x="${W}" y="17" text-anchor="end" font-family="${FONT}" font-size="15" font-weight="700" fill="${r.status === 'failed' ? '#D0453F' : color}">${pctText(p)}</text>
-<text x="18" y="35" font-family="${FONT}" font-size="11"><tspan fill="${color}" font-weight="600">${xml(modelName(r.model) + (r.effort ? ' · ' + r.effort : ''))}</tspan><tspan class="s">${xml(clip(`  ·  ${r.type}${steps}`, chars))}</tspan></text>
+<text x="18" y="35" font-family="${FONT}" font-size="11"><tspan fill="${color}" font-weight="600">${xml(modelName(r.model) + (r.effort ? ' · ' + r.effort : ''))}</tspan><tspan class="s">${xml(clip(`  ·  ${r.type}`, chars))}</tspan></text>
 <text class="s" x="${W}" y="35" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${fmtTokens(r.tokens)} tokens processed</text>
 <text class="t" x="18" y="52" font-family="${FONT}" font-size="11.5" font-style="italic">${xml(clip(now, chars + 8))}</text>
 <g transform="translate(0,62)">${barSvg(uid, W, p.ratio, r.status, at, shades)}</g>
@@ -244,12 +241,6 @@ export function markStalled(list: readonly Run[], at: number): Run[] | null {
   return list.some(quiet) ? list.map(r => (quiet(r) ? { ...r, status: 'stalled' as const } : r)) : null
 }
 
-// A number an agent reported, or the fallback when it sent none or something that is not a number ("3/5").
-const num = (v: unknown, fallback: number): number => {
-  const n = Number(v)
-  return v === undefined || !Number.isFinite(n) ? fallback : Math.max(0, Math.round(n))
-}
-
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -285,21 +276,15 @@ export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
     const id = e.agentId
     if (id) try {
-      const input = e as unknown as Record<string, unknown>
-      const isStep = e.tool === STEP_TOOL
+      const now = brief(e as unknown as Record<string, unknown>)
       // Not awaited: the tool call goes ahead without waiting for the pane.
       void (async () => {
         const at = await $.clock.now()
         await update($, runs, list =>
-          list.map(r => {
-            if (r.agentId !== id) return r
+          list.map(r =>
             // Heard from: a stalled row is running again.
-            const seen = { ...r, lastSeenAt: at, status: r.status === 'stalled' ? ('running' as const) : r.status }
-            if (!isStep) return { ...seen, now: brief(input) }
-            const total = num(input.total, r.stepTotal ?? 0)
-            const done = num(input.done, r.stepDone ?? 0)
-            return { ...seen, stepTotal: total || undefined, stepDone: total ? Math.min(total, done) : done, now: typeof input.note === 'string' && input.note ? clip(redact(input.note), 60) : r.now }
-          }),
+            r.agentId !== id ? r : { ...r, now, lastSeenAt: at, status: r.status === 'stalled' ? ('running' as const) : r.status },
+          ),
         )
       })().catch(() => {})
     } catch {}
@@ -502,9 +487,7 @@ export const register: Register = on => {
                   <Text dimColor wrap="truncate-end">
                     {'  '}
                     <Text color={rowShades(r)[1]}>{modelName(r.model) + (r.effort ? ' · ' + r.effort : '')}</Text>
-                    {` · ${r.type} · ${fmtTokens(r.tokens)} tokens processed`}
-                    {r.stepTotal ? ` · step ${r.stepDone ?? 0}/${r.stepTotal}` : ''}
-                  </Text>
+                    {` · ${r.type} · ${fmtTokens(r.tokens)} tokens processed`}                  </Text>
                   {isLive(r) ? <Text wrap="truncate-end">{'  ' + nowLine(r)}</Text> : null}
                   <Text>
                     {'  '}

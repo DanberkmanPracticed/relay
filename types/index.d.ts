@@ -21,9 +21,6 @@ export type Run = {
   tokens: number
   /** What the agent is doing now: its latest tool call, in a few words. */
   now: string
-  /** Self-reported steps, when the agent reports them through savvy-progress's step tool. */
-  stepDone?: number
-  stepTotal?: number
 }
 
 /** A group's title, by its key. */
